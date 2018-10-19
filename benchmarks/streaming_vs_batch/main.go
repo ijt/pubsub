@@ -85,7 +85,7 @@ func benchmarkBatchReceive(ctx context.Context) {
 			}
 		}
 		r := testing.Benchmark(bench)
-		msgsPerNs := float32(ng) * float32(msgCount) / float32(r.T)
+		msgsPerNs := float32(msgCount) / float32(r.T)
 		msgsPerSec := 1e9 * msgsPerNs
 		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
