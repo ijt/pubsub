@@ -36,7 +36,7 @@ func send(ctx context.Context) {
 }
 
 func benchmarkBatchReceive(ctx context.Context) {
-	log.Printf("Benchmarking batch receive")
+	log.Printf("Benchmarking batch receive.")
 	client, err := pubsublow.NewSubscriberClient(ctx)
 	if err != nil {
 		log.Fatal(err)
@@ -84,7 +84,7 @@ func benchmarkBatchReceive(ctx context.Context) {
 }
 
 func benchmarkReceive(ctx context.Context) {
-	log.Printf("Benchmarking receive")
+	log.Printf("Benchmarking receive on high-level GCP PubSub API.")
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		log.Fatalf("Could not create pubsub Client: %v", err)
@@ -93,7 +93,6 @@ func benchmarkReceive(ctx context.Context) {
 	var mu sync.Mutex
 	msgCount := 0
 	bench := func(b *testing.B) {
-		log.Printf("calling sub.Receive")
 		cctx, cancel := context.WithCancel(ctx)
 		err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
 			defer msg.Ack()
