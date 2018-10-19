@@ -7,20 +7,26 @@ import (
 	"sync"
 	"testing"
 
-	"cloud.google.com/go/pubsub/apiv1"
+	"cloud.google.com/go/pubsub"
+	pubsublow "cloud.google.com/go/pubsub/apiv1"
 	"golang.org/x/net/context"
 	pubsubpb "google.golang.org/genproto/googleapis/pubsub/v1"
+)
+
+const (
+	subscriptionName = "projects/gocloud-212523/subscriptions/hits1"
+	projectID        = "gocloud-212523"
 )
 
 func main() {
 	ctx := context.Background()
 	go send(ctx)
+	benchmarkReceive(ctx)
 	benchmarkBatchReceive(ctx)
-	benchmarkStreamingReceive(ctx)
 }
 
 func send(ctx context.Context) {
-	client, err := pubsub.NewPublisherClient(ctx)
+	client, err := pubsublow.NewPublisherClient(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,7 +37,7 @@ func send(ctx context.Context) {
 
 func benchmarkBatchReceive(ctx context.Context) {
 	log.Printf("Benchmarking batch receive")
-	client, err := pubsub.NewSubscriberClient(ctx)
+	client, err := pubsublow.NewSubscriberClient(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -46,7 +52,7 @@ func benchmarkBatchReceive(ctx context.Context) {
 				go func() {
 					defer wg.Done()
 					req := &pubsubpb.PullRequest{
-						Subscription: "projects/gocloud-212523/subscriptions/hits1",
+						Subscription: subscriptionName,
 						MaxMessages:  1000,
 					}
 					resp, err := client.Pull(ctx, req)
@@ -72,63 +78,43 @@ func benchmarkBatchReceive(ctx context.Context) {
 		}
 	}
 	r := testing.Benchmark(bench)
-	avgMsgsPerNs := float32(ng) * float32(msgCount) / (float32(r.N) * float32(r.T))
+	avgMsgsPerNs := float32(ng) * float32(msgCount) / float32(r.T)
 	avgMsgsPerSec := 1e9 * avgMsgsPerNs
 	fmt.Printf("Received %.2g msgs / sec\n", avgMsgsPerSec)
 }
 
-func benchmarkStreamingReceive(ctx context.Context) {
-	log.Printf("Benchmarking streaming receive")
-	var mu sync.Mutex
-	client, err := pubsub.NewSubscriberClient(ctx)
+func benchmarkReceive(ctx context.Context) {
+	log.Printf("Benchmarking receive")
+	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not create pubsub Client: %v", err)
 	}
+	sub := client.Subscription("hits1")
+	var mu sync.Mutex
 	msgCount := 0
 	bench := func(b *testing.B) {
-		msgCount = 0
-		mu.Lock()
-		pullClient, err := client.StreamingPull(ctx)
-		mu.Unlock()
-		if err != nil {
-			log.Fatalf("failed call to StreamingPull: %v", err)
-		}
-		for i := 0; i < b.N; i++ {
-			var ackIDs []string
-			req := &pubsubpb.StreamingPullRequest{
-				Subscription: "projects/gocloud-212523/subscriptions/hits1",
-				AckIds:       ackIDs,
-			}
-			ackIDs = nil
-			if err := pullClient.Send(req); err != nil {
-				log.Fatalf("failed call to Send: %v", err)
-			}
-
+		log.Printf("calling sub.Receive")
+		cctx, cancel := context.WithCancel(ctx)
+		err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
+			defer msg.Ack()
 			mu.Lock()
-			resp, err := pullClient.Recv()
-			if err != nil {
-				log.Fatalf("failed call to Recv: %v", err)
+			defer mu.Unlock()
+			msgCount++
+			if msgCount == b.N {
+				cancel()
 			}
-
-			for _, m := range resp.ReceivedMessages {
-				ackIDs = append(ackIDs, m.AckId)
-			}
-			ackReq := &pubsubpb.AcknowledgeRequest{
-				Subscription: req.Subscription,
-				AckIds:       ackIDs,
-			}
-			if err := client.Acknowledge(ctx, ackReq); err != nil {
-				log.Fatal(err)
-			}
+		})
+		if err != nil {
+			log.Fatal(err)
 		}
 	}
 	r := testing.Benchmark(bench)
-	msgsPerNs := float32(msgCount) / (float32(r.N) * float32(r.T))
+	msgsPerNs := float32(msgCount) / float32(r.T)
 	msgsPerSec := 1e9 * msgsPerNs
 	fmt.Printf("Received %.2g msgs / sec\n", msgsPerSec)
 }
 
-func pubWorker(ctx context.Context, client *pubsub.PublisherClient, batchSize int) {
+func pubWorker(ctx context.Context, client *pubsublow.PublisherClient, batchSize int) {
 	for {
 		var ms []*pubsubpb.PubsubMessage
 		for j := 0; j < batchSize; j++ {
