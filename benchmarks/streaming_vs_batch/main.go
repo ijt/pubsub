@@ -90,6 +90,7 @@ func benchmarkReceive(ctx context.Context) {
 		log.Fatalf("Could not create pubsub Client: %v", err)
 	}
 	sub := client.Subscription("hits1")
+	sub.ReceiveSettings.NumGoroutines = 10
 	var mu sync.Mutex
 	msgCount := 0
 	bench := func(b *testing.B) {
