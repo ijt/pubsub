@@ -4,8 +4,10 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"testing"
+	"text/tabwriter"
 
 	"cloud.google.com/go/pubsub"
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
@@ -36,82 +38,95 @@ func send(ctx context.Context) {
 }
 
 func benchmarkBatchReceive(ctx context.Context) {
-	log.Printf("Benchmarking batch receive.")
+	fmt.Printf("\nBenchmarking batch receive.\n")
 	client, err := pubsublow.NewSubscriberClient(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	msgCount := 0
-	ng := 10
-	bench := func(b *testing.B) {
-		msgCount = 0
-		for i := 0; i < b.N; i++ {
-			var wg sync.WaitGroup
-			for g := 0; g < ng; g++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					req := &pubsubpb.PullRequest{
-						Subscription: subscriptionName,
-						MaxMessages:  1000,
-					}
-					resp, err := client.Pull(ctx, req)
-					if err != nil {
-						log.Fatal(err)
-					}
-					msgCount += len(resp.ReceivedMessages)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight|tabwriter.Debug)
+	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
+	fmt.Fprintf(w, "------------\t--------\n")
+	for _, ng := range []int{1, 10, 100} {
+		var mu sync.Mutex
+		msgCount := 0
+		bench := func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				var wg sync.WaitGroup
+				for g := 0; g < ng; g++ {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						req := &pubsubpb.PullRequest{
+							Subscription: subscriptionName,
+							MaxMessages:  1000,
+						}
+						resp, err := client.Pull(ctx, req)
+						if err != nil {
+							log.Fatal(err)
+						}
+						mu.Lock()
+						msgCount += len(resp.ReceivedMessages)
+						mu.Unlock()
 
-					var acks []string
-					for _, m := range resp.ReceivedMessages {
-						acks = append(acks, m.AckId)
-					}
-					ackReq := &pubsubpb.AcknowledgeRequest{
-						Subscription: req.Subscription,
-						AckIds:       acks,
-					}
-					if err := client.Acknowledge(ctx, ackReq); err != nil {
-						log.Fatal(err)
-					}
-				}()
+						var acks []string
+						for _, m := range resp.ReceivedMessages {
+							acks = append(acks, m.AckId)
+						}
+						ackReq := &pubsubpb.AcknowledgeRequest{
+							Subscription: req.Subscription,
+							AckIds:       acks,
+						}
+						if err := client.Acknowledge(ctx, ackReq); err != nil {
+							log.Fatal(err)
+						}
+					}()
+				}
+				wg.Wait()
 			}
-			wg.Wait()
 		}
+		r := testing.Benchmark(bench)
+		msgsPerNs := float32(ng) * float32(msgCount) / float32(r.T)
+		msgsPerSec := 1e9 * msgsPerNs
+		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
-	r := testing.Benchmark(bench)
-	avgMsgsPerNs := float32(ng) * float32(msgCount) / float32(r.T)
-	avgMsgsPerSec := 1e9 * avgMsgsPerNs
-	fmt.Printf("Received %.2g msgs / sec\n", avgMsgsPerSec)
+	w.Flush()
 }
 
 func benchmarkReceive(ctx context.Context) {
-	log.Printf("Benchmarking receive on high-level GCP PubSub API.")
+	fmt.Printf("\nBenchmarking receive on high-level GCP PubSub API.\n")
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		log.Fatalf("Could not create pubsub Client: %v", err)
 	}
 	sub := client.Subscription("hits1")
-	sub.ReceiveSettings.NumGoroutines = 10
-	var mu sync.Mutex
-	msgCount := 0
-	bench := func(b *testing.B) {
-		cctx, cancel := context.WithCancel(ctx)
-		err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
-			defer msg.Ack()
-			mu.Lock()
-			defer mu.Unlock()
-			msgCount++
-			if msgCount == b.N {
-				cancel()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight|tabwriter.Debug)
+	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
+	fmt.Fprintf(w, "------------\t--------\n")
+	for _, ng := range []int{1, 10, 100} {
+		sub.ReceiveSettings.NumGoroutines = ng
+		var mu sync.Mutex
+		msgCount := 0
+		bench := func(b *testing.B) {
+			cctx, cancel := context.WithCancel(ctx)
+			err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
+				defer msg.Ack()
+				mu.Lock()
+				defer mu.Unlock()
+				msgCount++
+				if msgCount == b.N {
+					cancel()
+				}
+			})
+			if err != nil {
+				log.Fatal(err)
 			}
-		})
-		if err != nil {
-			log.Fatal(err)
 		}
+		r := testing.Benchmark(bench)
+		msgsPerNs := float32(msgCount) / float32(r.T)
+		msgsPerSec := 1e9 * msgsPerNs
+		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
-	r := testing.Benchmark(bench)
-	msgsPerNs := float32(msgCount) / float32(r.T)
-	msgsPerSec := 1e9 * msgsPerNs
-	fmt.Printf("Received %.2g msgs / sec\n", msgsPerSec)
+	w.Flush()
 }
 
 func pubWorker(ctx context.Context, client *pubsublow.PublisherClient, batchSize int) {
