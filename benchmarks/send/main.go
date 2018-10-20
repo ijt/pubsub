@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	// Low-level pubsub API
+	"cloud.google.com/go/pubsub"
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
 	"golang.org/x/net/context"
 	pubsubpb "google.golang.org/genproto/googleapis/pubsub/v1"
@@ -25,6 +26,7 @@ var showingSendRates = flag.Bool("sendrates", false, "whether to show how many m
 func main() {
 	flag.Parse()
 	ctx := context.Background()
+	benchmarkSend(ctx)
 	benchmarkBatchSend(ctx)
 }
 
@@ -74,4 +76,62 @@ func benchmarkBatchSend(ctx context.Context) {
 		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
 	w.Flush()
+}
+
+func benchmarkSend(ctx context.Context) {
+	fmt.Printf("\nBenchmarking high-level GCP PubSub API send\n")
+	client, err := pubsub.NewClient(ctx, projectID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	t := client.Topic("hits")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
+	fmt.Fprintf(w, "------------\t--------\n")
+	for _, ng := range []int{1, 10, 100} {
+		var mu sync.Mutex
+		msgCount := 0
+		bench := func(b *testing.B) {
+			var wg sync.WaitGroup
+			for g := 0; g < ng; g++ {
+				wg.Add(1)
+				go func() {
+					for i := 0; i < b.N; i++ {
+						// Send a bunch of messages.
+						var results []*pubsub.PublishResult
+						for j := 0; j < *batchSize; j++ {
+							r := t.Publish(ctx, &pubsub.Message{
+								Data: []byte(fmt.Sprintf("%d", j)),
+							})
+							results = append(results, r)
+						}
+
+						// Wait for the messages to reach the server.
+						var msgWg sync.WaitGroup
+						msgWg.Add(len(results))
+						for _, r := range results {
+							go func(r *pubsub.PublishResult) {
+								<-r.Ready()
+								msgWg.Done()
+							}(r)
+						}
+						msgWg.Wait()
+
+						// Update msgCount.
+						mu.Lock()
+						msgCount += len(results)
+						mu.Unlock()
+					}
+					wg.Done()
+				}()
+			}
+			wg.Wait()
+		}
+		r := testing.Benchmark(bench)
+		msgsPerNs := float32(msgCount) / float32(r.T)
+		msgsPerSec := 1e9 * msgsPerNs
+		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
+	}
+	w.Flush()
+
 }
