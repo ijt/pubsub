@@ -110,6 +110,7 @@ func benchmarkReceive(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		log.Printf("ng: %d\n", ng)
 		sub.ReceiveSettings.NumGoroutines = ng
+		sub.ReceiveSettings.MaxOutstandingMessages = ng * 1000
 		var mu sync.Mutex
 		msgCount := 0
 		bench := func(b *testing.B) {
