@@ -43,7 +43,7 @@ func benchmarkBatchReceive(ctx context.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight|tabwriter.Debug)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
 	fmt.Fprintf(w, "------------\t--------\n")
 	for _, ng := range []int{1, 10, 100} {
@@ -99,7 +99,7 @@ func benchmarkReceive(ctx context.Context) {
 		log.Fatalf("Could not create pubsub Client: %v", err)
 	}
 	sub := client.Subscription("hits1")
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight|tabwriter.Debug)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
 	fmt.Fprintf(w, "------------\t--------\n")
 	for _, ng := range []int{1, 10, 100} {
