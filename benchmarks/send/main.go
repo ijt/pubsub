@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sync"
 	"testing"
 
 	// Low-level pubsub API
@@ -31,27 +32,40 @@ func benchmarkBatchSend(ctx context.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	msgCount := 0
-	bench := func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			var ms []*pubsubpb.PubsubMessage
-			for j := 0; j < *batchSize; j++ {
-				m := pubsubpb.PubsubMessage{Data: []byte(fmt.Sprintf("%d", j))}
-				ms = append(ms, &m)
+	for _, ng := range []int{1, 10, 100} {
+		var mu sync.Mutex
+		msgCount := 0
+		bench := func(b *testing.B) {
+			var wg sync.WaitGroup
+			for g := 0; g < ng; g++ {
+				wg.Add(1)
+				go func() {
+					for i := 0; i < b.N; i++ {
+						var ms []*pubsubpb.PubsubMessage
+						for j := 0; j < *batchSize; j++ {
+							m := pubsubpb.PubsubMessage{Data: []byte(fmt.Sprintf("%d", j))}
+							ms = append(ms, &m)
+						}
+						req := &pubsubpb.PublishRequest{
+							Topic:    *fullTopic,
+							Messages: ms,
+						}
+						_, err := client.Publish(ctx, req)
+						if err != nil {
+							log.Fatal(err)
+						}
+						mu.Lock()
+						msgCount += len(ms)
+						mu.Unlock()
+					}
+					wg.Done()
+				}()
 			}
-			req := &pubsubpb.PublishRequest{
-				Topic:    *fullTopic,
-				Messages: ms,
-			}
-			_, err := client.Publish(ctx, req)
-			if err != nil {
-				log.Fatal(err)
-			}
-			msgCount += len(ms)
+			wg.Wait()
 		}
+		r := testing.Benchmark(bench)
+		msgsPerNs := float32(msgCount) / float32(r.T)
+		msgsPerSec := 1e9 * msgsPerNs
+		fmt.Printf("ng: %d: %8.2g msgs/sec\n", ng, msgsPerSec)
 	}
-	r := testing.Benchmark(bench)
-	msgsPerNs := float32(msgCount) / float32(r.T)
-	msgsPerSec := 1e9 * msgsPerNs
-	fmt.Printf("%8.2g msgs/sec\n", msgsPerSec)
 }
