@@ -2,12 +2,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"sync"
 	"testing"
 	"text/tabwriter"
+	"time"
 
 	"cloud.google.com/go/pubsub"
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
@@ -20,7 +22,10 @@ const (
 	projectID        = "gocloud-212523"
 )
 
+var showingSendRates = flag.Bool("sendrates", false, "whether to show how many messages per second are being sent")
+
 func main() {
+	flag.Parse()
 	ctx := context.Background()
 	go send(ctx)
 	benchmarkReceive(ctx)
@@ -103,6 +108,7 @@ func benchmarkReceive(ctx context.Context) {
 	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
 	fmt.Fprintf(w, "------------\t--------\n")
 	for _, ng := range []int{1, 10, 100} {
+		log.Printf("ng: %d\n", ng)
 		sub.ReceiveSettings.NumGoroutines = ng
 		var mu sync.Mutex
 		msgCount := 0
@@ -113,7 +119,7 @@ func benchmarkReceive(ctx context.Context) {
 				mu.Lock()
 				defer mu.Unlock()
 				msgCount++
-				if msgCount == b.N {
+				if msgCount >= b.N {
 					cancel()
 				}
 			})
@@ -129,6 +135,11 @@ func benchmarkReceive(ctx context.Context) {
 	w.Flush()
 }
 
+var (
+	sendsMu     sync.Mutex
+	sendsPerSec = 0
+)
+
 func pubWorker(ctx context.Context, client *pubsublow.PublisherClient, batchSize int) {
 	for {
 		var ms []*pubsubpb.PubsubMessage
@@ -143,6 +154,19 @@ func pubWorker(ctx context.Context, client *pubsublow.PublisherClient, batchSize
 		_, err := client.Publish(ctx, req)
 		if err != nil {
 			log.Fatal(err)
+		}
+
+		if *showingSendRates {
+			sendsMu.Lock()
+			sendsPerSec += batchSize
+			log.Printf("sends/sec: %d", sendsPerSec)
+			sendsMu.Unlock()
+			time.AfterFunc(time.Second, func() {
+				sendsMu.Lock()
+				sendsPerSec -= batchSize
+				log.Printf("sends/sec: %d", sendsPerSec)
+				sendsMu.Unlock()
+			})
 		}
 	}
 }
