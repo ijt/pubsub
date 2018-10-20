@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"testing"
+	"text/tabwriter"
 
 	// Low-level pubsub API
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
@@ -32,6 +34,9 @@ func benchmarkBatchSend(ctx context.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
+	fmt.Fprintf(w, "------------\t--------\n")
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
@@ -66,6 +71,7 @@ func benchmarkBatchSend(ctx context.Context) {
 		r := testing.Benchmark(bench)
 		msgsPerNs := float32(msgCount) / float32(r.T)
 		msgsPerSec := 1e9 * msgsPerNs
-		fmt.Printf("ng: %d: %8.2g msgs/sec\n", ng, msgsPerSec)
+		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
+	w.Flush()
 }
