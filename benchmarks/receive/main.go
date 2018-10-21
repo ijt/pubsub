@@ -28,8 +28,8 @@ func main() {
 	flag.Parse()
 	ctx := context.Background()
 	go send(ctx)
-	benchmarkReceive(ctx)
 	benchmarkBatchReceive(ctx)
+	benchmarkReceive(ctx)
 }
 
 func send(ctx context.Context) {
