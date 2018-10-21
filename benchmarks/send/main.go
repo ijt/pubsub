@@ -10,7 +10,6 @@ import (
 	"testing"
 	"text/tabwriter"
 
-	// Low-level pubsub API
 	"cloud.google.com/go/pubsub"
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
 	"golang.org/x/net/context"
