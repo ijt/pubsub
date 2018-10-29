@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 	"sync"
-	"testing"
 	"text/tabwriter"
+	"time"
 
 	"cloud.google.com/go/pubsub"
 	pubsublow "cloud.google.com/go/pubsub/apiv1"
@@ -41,37 +41,33 @@ func benchmarkBatchSend(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
-		bench := func(b *testing.B) {
+		dt := stopwatch(func() {
 			var wg sync.WaitGroup
 			for g := 0; g < ng; g++ {
 				wg.Add(1)
 				go func() {
-					for i := 0; i < b.N; i++ {
-						var ms []*pubsubpb.PubsubMessage
-						for j := 0; j < *batchSize; j++ {
-							m := pubsubpb.PubsubMessage{Data: []byte(fmt.Sprintf("%d", j))}
-							ms = append(ms, &m)
-						}
-						req := &pubsubpb.PublishRequest{
-							Topic:    *fullTopic,
-							Messages: ms,
-						}
-						_, err := client.Publish(ctx, req)
-						if err != nil {
-							log.Fatal(err)
-						}
-						mu.Lock()
-						msgCount += len(ms)
-						mu.Unlock()
+					var ms []*pubsubpb.PubsubMessage
+					for j := 0; j < *batchSize; j++ {
+						m := pubsubpb.PubsubMessage{Data: []byte(fmt.Sprintf("%d", j))}
+						ms = append(ms, &m)
 					}
+					req := &pubsubpb.PublishRequest{
+						Topic:    *fullTopic,
+						Messages: ms,
+					}
+					_, err := client.Publish(ctx, req)
+					if err != nil {
+						log.Fatal(err)
+					}
+					mu.Lock()
+					msgCount += len(ms)
+					mu.Unlock()
 					wg.Done()
 				}()
 			}
 			wg.Wait()
-		}
-		r := testing.Benchmark(bench)
-		msgsPerNs := float32(msgCount) / float32(r.T)
-		msgsPerSec := 1e9 * msgsPerNs
+		})
+		msgsPerSec := float64(msgCount) / dt.Seconds()
 		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
 	w.Flush()
@@ -90,47 +86,49 @@ func benchmarkSend(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
-		bench := func(b *testing.B) {
+		dt := stopwatch(func() {
 			var wg sync.WaitGroup
 			for g := 0; g < ng; g++ {
 				wg.Add(1)
 				go func() {
-					for i := 0; i < b.N; i++ {
-						// Send a bunch of messages.
-						var results []*pubsub.PublishResult
-						for j := 0; j < *batchSize; j++ {
-							r := t.Publish(ctx, &pubsub.Message{
-								Data: []byte(fmt.Sprintf("%d", j)),
-							})
-							results = append(results, r)
-						}
-
-						// Wait for the messages to reach the server.
-						var msgWg sync.WaitGroup
-						msgWg.Add(len(results))
-						for _, r := range results {
-							go func(r *pubsub.PublishResult) {
-								<-r.Ready()
-								msgWg.Done()
-							}(r)
-						}
-						msgWg.Wait()
-
-						// Update msgCount.
-						mu.Lock()
-						msgCount += len(results)
-						mu.Unlock()
+					// Send a bunch of messages.
+					var results []*pubsub.PublishResult
+					for j := 0; j < *batchSize; j++ {
+						r := t.Publish(ctx, &pubsub.Message{
+							Data: []byte(fmt.Sprintf("%d", j)),
+						})
+						results = append(results, r)
 					}
+
+					// Wait for the messages to reach the server.
+					var msgWg sync.WaitGroup
+					msgWg.Add(len(results))
+					for _, r := range results {
+						go func(r *pubsub.PublishResult) {
+							<-r.Ready()
+							msgWg.Done()
+						}(r)
+					}
+					msgWg.Wait()
+
+					// Update msgCount.
+					mu.Lock()
+					msgCount += len(results)
+					mu.Unlock()
 					wg.Done()
 				}()
 			}
 			wg.Wait()
-		}
-		r := testing.Benchmark(bench)
-		msgsPerNs := float32(msgCount) / float32(r.T)
-		msgsPerSec := 1e9 * msgsPerNs
+		})
+		msgsPerSec := float64(msgCount) / dt.Seconds()
 		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
 	w.Flush()
+}
 
+// stopwatch runs the given function and returns how long it took to run.
+func stopwatch(f func()) time.Duration {
+	t0 := time.Now()
+	f()
+	return time.Now().Sub(t0)
 }
