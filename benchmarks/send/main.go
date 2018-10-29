@@ -41,7 +41,7 @@ func benchmarkBatchSend(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
-		dt := stopwatch(func() {
+		dt := clock(func() {
 			var wg sync.WaitGroup
 			for g := 0; g < ng; g++ {
 				wg.Add(1)
@@ -86,7 +86,7 @@ func benchmarkSend(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
-		dt := stopwatch(func() {
+		dt := clock(func() {
 			var wg sync.WaitGroup
 			for g := 0; g < ng; g++ {
 				wg.Add(1)
@@ -126,8 +126,8 @@ func benchmarkSend(ctx context.Context) {
 	w.Flush()
 }
 
-// stopwatch runs the given function and returns how long it took to run.
-func stopwatch(f func()) time.Duration {
+// clock runs the given function and returns how long it took to run.
+func clock(f func()) time.Duration {
 	t0 := time.Now()
 	f()
 	return time.Now().Sub(t0)
