@@ -80,6 +80,8 @@ func benchmarkSend(ctx context.Context) {
 		log.Fatal(err)
 	}
 	t := client.Topic("hits")
+	t.PublishSettings.DelayThreshold = time.Second
+	t.PublishSettings.CountThreshold = 1000
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
 	fmt.Fprintf(w, "------------\t--------\n")
