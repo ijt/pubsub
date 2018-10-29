@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"testing"
 	"text/tabwriter"
 	"time"
 
@@ -54,44 +53,40 @@ func benchmarkBatchReceive(ctx context.Context) {
 	for _, ng := range []int{1, 10, 100} {
 		var mu sync.Mutex
 		msgCount := 0
-		bench := func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				var wg sync.WaitGroup
-				for g := 0; g < ng; g++ {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						req := &pubsubpb.PullRequest{
-							Subscription: subscriptionName,
-							MaxMessages:  1000,
-						}
-						resp, err := client.Pull(ctx, req)
-						if err != nil {
-							log.Fatal(err)
-						}
-						mu.Lock()
-						msgCount += len(resp.ReceivedMessages)
-						mu.Unlock()
+		dt := clock(func() {
+			var wg sync.WaitGroup
+			for g := 0; g < ng; g++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					req := &pubsubpb.PullRequest{
+						Subscription: subscriptionName,
+						MaxMessages:  1000,
+					}
+					resp, err := client.Pull(ctx, req)
+					if err != nil {
+						log.Fatal(err)
+					}
+					mu.Lock()
+					msgCount += len(resp.ReceivedMessages)
+					mu.Unlock()
 
-						var acks []string
-						for _, m := range resp.ReceivedMessages {
-							acks = append(acks, m.AckId)
-						}
-						ackReq := &pubsubpb.AcknowledgeRequest{
-							Subscription: req.Subscription,
-							AckIds:       acks,
-						}
-						if err := client.Acknowledge(ctx, ackReq); err != nil {
-							log.Fatal(err)
-						}
-					}()
-				}
-				wg.Wait()
+					var acks []string
+					for _, m := range resp.ReceivedMessages {
+						acks = append(acks, m.AckId)
+					}
+					ackReq := &pubsubpb.AcknowledgeRequest{
+						Subscription: req.Subscription,
+						AckIds:       acks,
+					}
+					if err := client.Acknowledge(ctx, ackReq); err != nil {
+						log.Fatal(err)
+					}
+				}()
 			}
-		}
-		r := testing.Benchmark(bench)
-		msgsPerNs := float32(msgCount) / float32(r.T)
-		msgsPerSec := 1e9 * msgsPerNs
+			wg.Wait()
+		})
+		msgsPerSec := float64(msgCount) / dt.Seconds()
 		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
 	w.Flush()
@@ -105,31 +100,31 @@ func benchmarkReceive(ctx context.Context) {
 	}
 	sub := client.Subscription("hits1")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
-	fmt.Fprintf(w, "# goroutines\tmsgs/sec\n")
-	fmt.Fprintf(w, "------------\t--------\n")
+	fmt.Fprintf(w, "# goroutines\tmsgs\tmsgs/sec\n")
+	fmt.Fprintf(w, "------------\t----\t--------\n")
 	for _, ng := range []int{1, 10, 100} {
 		sub.ReceiveSettings.NumGoroutines = ng
 		var mu sync.Mutex
-		msgCount := 0
-		bench := func(b *testing.B) {
-			cctx, cancel := context.WithCancel(ctx)
-			err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
-				defer msg.Ack()
-				mu.Lock()
-				defer mu.Unlock()
-				msgCount++
-				if msgCount >= b.N {
-					cancel()
+		for _, nm := range []int{1, 10, 100, 1000} {
+			msgCount := 0
+			dt := clock(func() {
+				cctx, cancel := context.WithCancel(ctx)
+				err = sub.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
+					defer msg.Ack()
+					mu.Lock()
+					defer mu.Unlock()
+					msgCount++
+					if msgCount >= nm {
+						cancel()
+					}
+				})
+				if err != nil {
+					log.Fatal(err)
 				}
 			})
-			if err != nil {
-				log.Fatal(err)
-			}
+			msgsPerSec := float64(msgCount) / dt.Seconds()
+			fmt.Fprintf(w, "%d\t%d\t%.2g\n", ng, nm, msgsPerSec)
 		}
-		r := testing.Benchmark(bench)
-		msgsPerNs := float32(msgCount) / float32(r.T)
-		msgsPerSec := 1e9 * msgsPerNs
-		fmt.Fprintf(w, "%d\t%.2g\n", ng, msgsPerSec)
 	}
 	w.Flush()
 }
@@ -168,4 +163,11 @@ func pubWorker(ctx context.Context, client *pubsublow.PublisherClient, batchSize
 			})
 		}
 	}
+}
+
+// clock runs the given function and returns how long it took to run.
+func clock(f func()) time.Duration {
+	t0 := time.Now()
+	f()
+	return time.Now().Sub(t0)
 }
